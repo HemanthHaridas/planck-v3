@@ -1,5 +1,9 @@
-import numpy
-import typing
+"""Cartesian coordinate representation of molecular geometry."""
+
+from typing import Any, Dict, List, Tuple, Union
+
+import numpy as np
+
 from src.geometry import base
 
 
@@ -14,20 +18,14 @@ class Cartesian(base.BaseGeometry):
       2. A tuple containing (atoms, coords, charge, multiplicity).
 
     Attributes:
-        atoms (list[str]):
-            List of atomic symbols (e.g., ["H", "O", "H"]).
-        coords (numpy.ndarray):
-            Array of Cartesian coordinates with shape (N, 3), where N is the
-            number of atoms.
-        coords_internal (numpy.ndarray):
-            Flattened 1D representation of `coords`, useful for internal
-            computations.
-        natoms (int):
-            Number of atoms in the system.
-        charge (int):
-            Total molecular charge.
-        multi (int):
-            Spin multiplicity of the system.
+        atoms (List[str]): List of atomic symbols (e.g., ["H", "O", "H"]).
+        coords (np.ndarray): Array of Cartesian coordinates with shape (N, 3).
+        coords_internal (np.ndarray): Flattened 1D representation of coords.
+        natoms (int): Number of atoms in the system.
+        charge (int): Total molecular charge.
+        multi (int): Spin multiplicity of the system.
+        atomicnumbers (np.ndarray): Array of atomic numbers.
+        atomicmasses (np.ndarray): Array of atomic masses.
 
     Example (XYZ-like string input):
         >>> xyz_data = \"\"\"3
@@ -37,28 +35,20 @@ class Cartesian(base.BaseGeometry):
         ... H 1.0 0.0 0.0\"\"\"
         >>> geom = Cartesian()
         >>> geom.geometry = xyz_data
-        >>> geom.geometry
-        (['H', 'O', 'H'],
-         array([[0., 0., 0.],
-                [0., 0., 1.],
-                [1., 0., 0.]]))
+        >>> geom.geometry["atoms"]
+        ['H', 'O', 'H']
 
     Example (tuple input):
         >>> atoms = ["H", "O", "H"]
-        >>> coords = [[0.0, 0.0, 0.0],
-        ...           [0.0, 0.0, 1.0],
-        ...           [1.0, 0.0, 0.0]]
+        >>> coords = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
         >>> charge, multi = 0, 1
         >>> geom = Cartesian()
         >>> geom.geometry = (atoms, coords, charge, multi)
-        >>> geom.geometry
-        (['H', 'O', 'H'],
-         array([[0., 0., 0.],
-                [0., 0., 1.],
-                [1., 0., 0.]]))
+        >>> geom.natoms
+        3
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Initialize a Cartesian geometry object.
 
@@ -68,27 +58,30 @@ class Cartesian(base.BaseGeometry):
         super().__init__()
 
     @property
-    def geometry(self) -> dict:
+    def geometry(self) -> Dict[str, Any]:
         """
         Get the molecular geometry in Cartesian representation.
 
         Returns:
-            tuple:
-                A tuple containing:
-                - atoms (list[str]): Atomic symbols.
-                - coords (numpy.ndarray): Cartesian coordinates (N, 3).
+            dict: A dictionary containing:
+                - atoms (List[str]): Atomic symbols.
+                - coords (np.ndarray): Cartesian coordinates (N, 3).
+                - charge (int): Molecular charge.
+                - multi (int): Spin multiplicity.
+                - atomicnumbers (np.ndarray): Atomic numbers.
+                - atomicmasses (np.ndarray): Atomic masses.
         """
         return {
-            "atoms": self.atoms, 
+            "atoms": self.atoms,
             "coords": self.coords,
             "charge": self.charge,
             "multi": self.multi,
             "atomicnumbers": self.atomicnumbers,
-            "atomicmasses": self.atomicmass
+            "atomicmasses": self.atomicmasses,
         }
 
     @geometry.setter
-    def geometry(self, value) -> typing.Any:
+    def geometry(self, value: Union[str, Tuple[List[str], Any, int, int]]) -> None:
         """
         Set the molecular geometry in Cartesian representation.
 
@@ -101,53 +94,131 @@ class Cartesian(base.BaseGeometry):
             (atoms, coords, charge, multiplicity)
 
         Args:
-            value (str or tuple):
-                Input geometry data.
+            value: Input geometry data as string or tuple.
 
         Raises:
             ValueError:
                 - If atom lines are malformed (not 4 tokens).
                 - If the number of atoms does not match the header.
+                - If coordinates cannot be parsed as floats.
             TypeError:
                 - If atoms are not strings.
                 - If the input type is unsupported.
         """
-        _coords = []
         if isinstance(value, str):
-            _structure = [_line for _line in value.split("\n") if _line.strip()]
-            self.natoms = int(_structure[0])
-            self.charge, self.multi = map(int, _structure[1].split())
-
-            for _line in _structure[2:]:
-                _data = _line.split()
-                if len(_data) != 4:
-                    raise ValueError(f"Malformed atom line: {_line}")
-                self.atoms.append(_data[0])
-                _coords.append([float(x) for x in _data[1:]])
-
-            self.coords = numpy.array(_coords)
-            self.coords_internal = self.coords.flatten()
-
-            if self.natoms != len(self.atoms):
-                raise ValueError("Mismatch between header and atom lines.")
-
+            self._from_xyz_string(value)
         elif isinstance(value, tuple) and len(value) == 4:
-            self.atoms, self.coords, self.charge, self.multi = value
-
-            if not all(isinstance(a, str) for a in self.atoms):
-                raise TypeError("Atoms must be a list of strings.")
-
-            self.coords = numpy.array(self.coords, dtype=float).reshape(len(self.atoms), 3)
-            self.coords_internal = self.coords.flatten()
-            self.charge = int(self.charge)
-            self.multi = int(self.multi)
-
+            self._from_tuple(value)
         else:
-            raise TypeError("Geometry must be defined either as an xyz block or (atoms, coords, charge, multiplicity).")
+            raise TypeError(
+                "Geometry must be defined either as an xyz block string or "
+                "a tuple (atoms, coords, charge, multiplicity)."
+            )
 
-    def __repr__(self):
+    def _from_xyz_string(self, xyz_string: str) -> None:
+        """Parse geometry from XYZ-like string format."""
+        lines = [line.strip() for line in xyz_string.strip().split("\n") if line.strip()]
+        
+        if len(lines) < 2:
+            raise ValueError("XYZ string must contain at least 2 lines (natoms, charge/multi).")
+
+        # Parse header
+        try:
+            self.natoms = int(lines[0])
+        except ValueError as e:
+            raise ValueError(f"First line must be an integer (number of atoms): {lines[0]}") from e
+
+        # Parse charge and multiplicity
+        try:
+            charge_multi = lines[1].split()
+            if len(charge_multi) != 2:
+                raise ValueError("Second line must contain charge and multiplicity.")
+            self.charge = int(charge_multi[0])
+            self.multi = int(charge_multi[1])
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"Invalid charge/multiplicity line: {lines[1]}") from e
+
+        # Parse atom lines
+        if len(lines) - 2 != self.natoms:
+            raise ValueError(
+                f"Mismatch between header ({self.natoms} atoms) and "
+                f"atom lines ({len(lines) - 2} lines)."
+            )
+
+        atoms = []
+        coords = []
+        
+        for i, line in enumerate(lines[2:], start=3):
+            tokens = line.split()
+            if len(tokens) != 4:
+                raise ValueError(
+                    f"Malformed atom line {i}: expected 4 tokens "
+                    f"(symbol x y z), got {len(tokens)}: {line}"
+                )
+            
+            symbol = tokens[0]
+            try:
+                x, y, z = map(float, tokens[1:])
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid coordinates in line {i}: {tokens[1:]}"
+                ) from e
+            
+            atoms.append(symbol)
+            coords.append([x, y, z])
+
+        self.atoms = atoms
+        self.coords = np.array(coords, dtype=float)
+        self.coords_internal = self.coords.flatten()
+        self._update_atomic_properties()
+
+    def _from_tuple(self, value: Tuple[List[str], Any, int, int]) -> None:
+        """Parse geometry from tuple format."""
+        atoms, coords, charge, multi = value
+
+        # Validate atoms
+        if not isinstance(atoms, (list, tuple)):
+            raise TypeError("Atoms must be a list or tuple.")
+        
+        if not all(isinstance(atom, str) for atom in atoms):
+            raise TypeError("All atoms must be strings.")
+
+        if len(atoms) == 0:
+            raise ValueError("Atoms list cannot be empty.")
+
+        # Validate and convert coordinates
+        coords_array = np.array(coords, dtype=float)
+        
+        if coords_array.ndim != 2:
+            raise ValueError(f"Coordinates must be 2D array, got {coords_array.ndim}D.")
+        
+        if coords_array.shape[1] != 3:
+            raise ValueError(
+                f"Coordinates must have 3 columns (x, y, z), got {coords_array.shape[1]}."
+            )
+        
+        if len(atoms) != coords_array.shape[0]:
+            raise ValueError(
+                f"Mismatch: {len(atoms)} atoms but {coords_array.shape[0]} coordinate rows."
+            )
+
+        # Validate charge and multiplicity
+        self.charge = int(charge)
+        self.multi = int(multi)
+        
+        if self.multi < 1:
+            raise ValueError(f"Multiplicity must be >= 1, got {self.multi}.")
+
+        self.atoms = list(atoms)
+        self.coords = coords_array
+        self.coords_internal = self.coords.flatten()
+        self.natoms = len(self.atoms)
+        self._update_atomic_properties()
+
+    def __repr__(self) -> str:
+        """Return string representation of the Cartesian geometry."""
         return (
-            f"Cartesian(natoms={self.natoms}), ",
-            f"Charge = {self.charge}, ",
-            f"Multiplicity = {self.multi}"
+            f"Cartesian(natoms={self.natoms}, "
+            f"charge={self.charge}, "
+            f"multiplicity={self.multi})"
         )
